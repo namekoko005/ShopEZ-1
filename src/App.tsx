@@ -1,790 +1,520 @@
-import { useState, useEffect } from 'react';
-import { ShoppingCart, Receipt, BarChart3, Home, Plus, Minus, Trash2, Eye, TrendingUp, DollarSign, Package, Users, Settings, Edit, Save, X } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { ShoppingCart, Receipt, BarChart3, Home, Plus, Minus, Trash2, TrendingUp, DollarSign, Package, Users, Settings, Edit, Save, X } from 'lucide-react';
+import QRCode from 'qrcode';
 
-const RestaurantApp = () => {
-  const [currentPage, setCurrentPage] = useState('dashboard');
-  const [orders, setOrders] = useState([]);
-  const [currentOrder, setCurrentOrder] = useState([]);
-  const [bills, setBills] = useState([]);
-  const [menuItems, setMenuItems] = useState([
-    { id: 1, name: 'ข้าวผัดกุ้ง', price: 60, category: 'ข้าว' },
-    { id: 2, name: 'ข้าวผัดหมู', price: 50, category: 'ข้าว' },
-    { id: 3, name: 'ผัดไทย', price: 45, category: 'เส้น' },
-    { id: 4, name: 'ผัดซีอิ๊ว', price: 40, category: 'เส้น' },
-    { id: 5, name: 'ต้มยำกุ้ง', price: 80, category: 'แกง' },
-    { id: 6, name: 'แกงเขียวหวาน', price: 70, category: 'แกง' },
-    { id: 7, name: 'โค้กเย็น', price: 20, category: 'เครื่องดื่ม' },
-    { id: 8, name: 'น้ำเปล่า', price: 15, category: 'เครื่องดื่ม' }
-  ]);
-  const [editingItem, setEditingItem] = useState(null);
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [newItem, setNewItem] = useState({ name: '', price: '', category: '' });
-  const [shopSettings, setShopSettings] = useState({
-    shopName: 'ร้านอาหารตามสั่ง',
-    promptPayId: '0123456789',
-    promptPayName: 'นายสมชาย ใจดี'
-  });
-  const [showSettingsForm, setShowSettingsForm] = useState(false);
+// Type definitions for the application data
+interface MenuItem {
+    id: number;
+    name: string;
+    price: number;
+    category: 'Food' | 'Drink' | 'Dessert';
+}
 
-  // คำนวณสถิติ
-  const calculateStats = () => {
-    const today = new Date().toDateString();
-    const todayBills = bills.filter(bill => new Date(bill.date).toDateString() === today);
-    const todayRevenue = todayBills.reduce((sum, bill) => sum + bill.total, 0);
-    const totalRevenue = bills.reduce((sum, bill) => sum + bill.total, 0);
-    
-    // เมนูขายดี
-    const itemSales = {};
-    bills.forEach(bill => {
-      bill.items.forEach(item => {
-        itemSales[item.name] = (itemSales[item.name] || 0) + item.quantity;
-      });
-    });
-    
-    const topItems = Object.entries(itemSales)
-      .sort(([,a], [,b]) => b - a)
-      .slice(0, 5);
-    
-    return {
-      todayRevenue,
-      totalRevenue,
-      todayOrders: todayBills.length,
-      totalOrders: bills.length,
-      topItems
+interface OrderItem {
+    id: number;
+    name: string;
+    price: number;
+    quantity: number;
+}
+
+interface Bill {
+    id: number;
+    date: string;
+    items: OrderItem[];
+    total: number;
+    status: 'Paid' | 'Unpaid';
+}
+
+interface ShopSettings {
+    shopName: string;
+    promptPayNumber: string;
+}
+
+const initialMenuItems: MenuItem[] = [
+    { id: 1, name: 'กะเพราไก่', price: 50, category: 'Food' },
+    { id: 2, name: 'ข้าวไข่เจียว', price: 40, category: 'Food' },
+    { id: 3, name: 'ชาเย็น', price: 25, category: 'Drink' },
+    { id: 4, name: 'สเต๊กหมู', price: 120, category: 'Food' },
+    { id: 5, name: 'น้ำเปล่า', price: 15, category: 'Drink' },
+];
+
+const initialBills: Bill[] = [
+    { id: 1, date: '2025-08-01T10:00:00.000Z', items: [{ id: 1, name: 'กะเพราไก่', price: 50, quantity: 2 }], total: 100, status: 'Paid' },
+    { id: 2, date: '2025-08-01T12:30:00.000Z', items: [{ id: 3, name: 'ชาเย็น', price: 25, quantity: 1 }, { id: 2, name: 'ข้าวไข่เจียว', price: 40, quantity: 1 }], total: 65, status: 'Paid' },
+    { id: 3, date: '2025-08-02T09:15:00.000Z', items: [{ id: 4, name: 'สเต๊กหมู', price: 120, quantity: 1 }], total: 120, status: 'Paid' },
+    { id: 4, date: '2025-08-02T15:00:00.000Z', items: [{ id: 1, name: 'กะเพราไก่', price: 50, quantity: 1 }], total: 50, status: 'Paid' },
+];
+
+export default function RestaurantApp() {
+    const [currentPage, setCurrentPage] = useState('dashboard');
+    const [menuItems, setMenuItems] = useState<MenuItem[]>(initialMenuItems);
+    const [currentOrder, setCurrentOrder] = useState<OrderItem[]>([]);
+    const [bills, setBills] = useState<Bill[]>(initialBills);
+    const [shopSettings, setShopSettings] = useState<ShopSettings>({ shopName: 'ร้านอาหารเจมีไน', promptPayNumber: '1234567890' });
+    const [editingItem, setEditingItem] = useState<number | null>(null);
+
+    const { todayRevenue, totalRevenue, topSellingItems } = useMemo(() => {
+        const today = new Date().toDateString();
+        const todayBills = bills.filter(bill => new Date(bill.date).toDateString() === today);
+        const todayRevenue = todayBills.reduce((sum, bill) => sum + bill.total, 0);
+        const totalRevenue = bills.reduce((sum, bill) => sum + bill.total, 0);
+
+        const itemSales: { [key: string]: number } = {};
+        bills.forEach(bill => {
+            bill.items.forEach(item => {
+                itemSales[item.name] = (itemSales[item.name] || 0) + item.quantity;
+            });
+        });
+
+        const sortedItems = Object.entries(itemSales)
+            .sort(([, a], [, b]) => (b as number) - (a as number))
+            .slice(0, 5);
+
+        return { todayRevenue, totalRevenue, topSellingItems: sortedItems };
+    }, [bills]);
+
+    const addToOrder = (item: MenuItem) => {
+        const existingItem = currentOrder.find(orderItem => orderItem.id === item.id);
+        if (existingItem) {
+            setCurrentOrder(currentOrder.map(orderItem =>
+                orderItem.id === item.id
+                    ? { ...orderItem, quantity: orderItem.quantity + 1 }
+                    : orderItem
+            ));
+        } else {
+            setCurrentOrder([...currentOrder, { ...item, quantity: 1 }]);
+        }
     };
-  };
 
-  const stats = calculateStats();
+    const updateQuantity = (itemId: number, newQuantity: number) => {
+        if (newQuantity <= 0) {
+            setCurrentOrder(currentOrder.filter(item => item.id !== itemId));
+        } else {
+            setCurrentOrder(currentOrder.map(item =>
+                item.id === itemId ? { ...item, quantity: newQuantity } : item
+            ));
+        }
+    };
 
-  // เพิ่มรายการในออเดอร์
-  const addToOrder = (item) => {
-    const existingItem = currentOrder.find(orderItem => orderItem.id === item.id);
-    if (existingItem) {
-      setCurrentOrder(currentOrder.map(orderItem =>
-        orderItem.id === item.id
-          ? { ...orderItem, quantity: orderItem.quantity + 1 }
-          : orderItem
-      ));
-    } else {
-      setCurrentOrder([...currentOrder, { ...item, quantity: 1 }]);
-    }
-  };
+    const removeFromOrder = (itemId: number) => {
+        setCurrentOrder(currentOrder.filter(item => item.id !== itemId));
+    };
 
-  // เพิ่มเมนูใหม่
-  const addMenuItem = () => {
-    if (!newItem.name || !newItem.price || !newItem.category) return;
-    
-    const nextId = Math.max(...menuItems.map(item => item.id)) + 1;
-    const item = {
-      id: nextId,
-      name: newItem.name,
-      price: parseInt(newItem.price),
-      category: newItem.category
+    const calculateTotal = (orderItems: OrderItem[]) => {
+        return orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    };
+
+    const generateBill = () => {
+        const newBill: Bill = {
+            id: bills.length + 1,
+            date: new Date().toISOString(),
+            items: currentOrder,
+            total: calculateTotal(currentOrder),
+            status: 'Unpaid',
+        };
+        setBills([...bills, newBill]);
+        setCurrentOrder([]);
+        setCurrentPage('bill');
+    };
+
+    const payBill = (billId: number) => {
+        setBills(bills.map(bill => bill.id === billId ? { ...bill, status: 'Paid' } : bill));
+    };
+
+    const generatePromptPayQR = (amount: number) => {
+        if (!shopSettings.promptPayNumber) {
+            return '';
+        }
+        const promptPayString = `00020101021230370016A0000006770101110113000${shopSettings.promptPayNumber}5404${amount.toFixed(2)}5802TH530376452044234590379963048991`;
+        let qrCodeUrl = '';
+        QRCode.toDataURL(promptPayString, { errorCorrectionLevel: 'H' }, (err, url) => {
+            if (err) throw err;
+            qrCodeUrl = url;
+        });
+        return qrCodeUrl;
+    };
+
+    const deleteMenuItem = (id: number) => {
+        setMenuItems(menuItems.filter(item => item.id !== id));
+    };
+
+    const updateMenuItem = (id: number, updatedItem: MenuItem) => {
+        setMenuItems(menuItems.map(item => item.id === id ? updatedItem : item));
+    };
+
+    const addMenuItem = (newItem: Omit<MenuItem, 'id'>) => {
+        const newId = menuItems.length > 0 ? Math.max(...menuItems.map(item => item.id)) + 1 : 1;
+        setMenuItems([...menuItems, { ...newItem, id: newId }]);
     };
     
-    setMenuItems([...menuItems, item]);
-    setNewItem({ name: '', price: '', category: '' });
-    setShowAddForm(false);
-  };
+    // --- Components for each page ---
 
-  // อัพเดทเมนู
-  const updateMenuItem = (id, updatedItem) => {
-    setMenuItems(menuItems.map(item =>
-      item.id === id ? { ...item, ...updatedItem } : item
-    ));
-    setEditingItem(null);
-  };
-
-  // สร้าง QR Code PromptPay
-  const generatePromptPayQR = (amount) => {
-    // รูปแบบ QR Code สำหรับ PromptPay
-    const promptPayId = shopSettings.promptPayId.replace(/-/g, '');
-    const amountStr = amount.toFixed(2);
-    
-    // สร้าง QR Code Data
-    const qrData = `00020101021129370016A000000677010111${promptPayId.padStart(13, '0')}54${amountStr}5802TH630${shopSettings.shopName}6304`;
-    
-    // สร้าง URL สำหรับ QR Code โดยใช้ qr-server
-    return `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(qrData)}`;
-  };
-
-  // อัพเดทจำนวนในออเดอร์
-  const updateQuantity = (itemId, newQuantity) => {
-    if (newQuantity <= 0) {
-      setCurrentOrder(currentOrder.filter(item => item.id !== itemId));
-    } else {
-      setCurrentOrder(currentOrder.map(item =>
-        item.id === itemId ? { ...item, quantity: newQuantity } : item
-      ));
-    }
-  };
-
-  // ลบรายการจากออเดอร์
-  const removeFromOrder = (itemId) => {
-    setCurrentOrder(currentOrder.filter(item => item.id !== itemId));
-  };
-
-  // คำนวณยอดรวม
-  const calculateTotal = (orderItems) => {
-    return orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
-  };
-
-  // ออกบิล
-  const generateBill = () => {
-    if (currentOrder.length === 0) return;
-    
-    const newBill = {
-      id: bills.length + 1,
-      date: new Date().toISOString(),
-      items: currentOrder,
-      total: calculateTotal(currentOrder),
-      status: 'ชำระแล้ว'
-    };
-    
-    setBills([...bills, newBill]);
-    setCurrentOrder([]);
-    setCurrentPage('bill');
-  };
-
-  // หน้าจัดการเมนู
-  const MenuManagePage = () => (
-    <div className="p-6">
-                  <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold text-gray-800">จัดการเมนูอาหาร</h1>
-        <div className="space-x-3">
-          <button
-            onClick={() => setShowSettingsForm(true)}
-            className="bg-purple-500 text-white px-4 py-2 rounded-lg hover:bg-purple-600 flex items-center space-x-2"
-          >
-            <Settings size={20} />
-            <span>ตั้งค่าร้าน</span>
-          </button>
-          <button
-            onClick={() => setShowAddForm(true)}
-            className="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 flex items-center space-x-2"
-          >
-            <Plus size={20} />
-            <span>เพิ่มเมนูใหม่</span>
-          </button>
-        </div>
-      </div>
-
-      {/* ฟอร์มตั้งค่าร้าน */}
-      {showSettingsForm && (
-        <div className="bg-white p-6 rounded-lg shadow-sm border mb-6">
-          <h2 className="text-lg font-semibold mb-4">ตั้งค่าข้อมูลร้าน & PromptPay</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-2">ชื่อร้าน</label>
-              <input
-                type="text"
-                value={shopSettings.shopName}
-                onChange={(e) => setShopSettings({ ...shopSettings, shopName: e.target.value })}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-                placeholder="ระบุชื่อร้าน"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                เลขที่ PromptPay (เบอร์โทร หรือ เลขประจำตัว)
-              </label>
-              <input
-                type="text"
-                value={shopSettings.promptPayId}
-                onChange={(e) => setShopSettings({ ...shopSettings, promptPayId: e.target.value })}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-                placeholder="เช่น 0812345678 หรือ 1234567890123"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">ชื่อเจ้าของบัญชี</label>
-              <input
-                type="text"
-                value={shopSettings.promptPayName}
-                onChange={(e) => setShopSettings({ ...shopSettings, promptPayName: e.target.value })}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
-                placeholder="ระบุชื่อเจ้าของบัญชี"
-              />
-            </div>
-          </div>
-          <div className="flex justify-end space-x-3 mt-4">
-            <button
-              onClick={() => setShowSettingsForm(false)}
-              className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
-            >
-              ยกเลิก
-            </button>
-            <button
-              onClick={() => setShowSettingsForm(false)}
-              className="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600"
-            >
-              บันทึกการตั้งค่า
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ฟอร์มเพิ่มเมนูใหม่ */}
-      {showAddForm && (
-        <div className="bg-white p-6 rounded-lg shadow-sm border mb-6">
-          <h2 className="text-lg font-semibold mb-4">เพิ่มเมนูใหม่</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">ชื่อเมนู</label>
-              <input
-                type="text"
-                value={newItem.name}
-                onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="ระบุชื่อเมนู"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">ราคา</label>
-              <input
-                type="number"
-                value={newItem.price}
-                onChange={(e) => setNewItem({ ...newItem, price: e.target.value })}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                placeholder="ระบุราคา"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">หมวดหมู่</label>
-              <select
-                value={newItem.category}
-                onChange={(e) => setNewItem({ ...newItem, category: e.target.value })}
-                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="">เลือกหมวดหมู่</option>
-                <option value="ข้าว">ข้าว</option>
-                <option value="เส้น">เส้น</option>
-                <option value="แกง">แกง</option>
-                <option value="เครื่องดื่ม">เครื่องดื่ม</option>
-                <option value="ของหวาน">ของหวาน</option>
-                <option value="อื่นๆ">อื่นๆ</option>
-              </select>
-            </div>
-          </div>
-          <div className="flex justify-end space-x-3 mt-4">
-            <button
-              onClick={() => {
-                setShowAddForm(false);
-                setNewItem({ name: '', price: '', category: '' });
-              }}
-              className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50"
-            >
-              ยกเลิก
-            </button>
-            <button
-              onClick={addMenuItem}
-              className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
-            >
-              เพิ่มเมนู
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* รายการเมนู */}
-      <div className="bg-white rounded-lg shadow-sm border">
-        <div className="p-4 border-b">
-          <h2 className="text-lg font-semibold">รายการเมนูทั้งหมด</h2>
-        </div>
-        <div className="p-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {menuItems.map(item => (
-              <div key={item.id} className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow">
-                {editingItem === item.id ? (
-                  <MenuItemEditForm
-                    item={item}
-                    onSave={(updatedItem) => updateMenuItem(item.id, updatedItem)}
-                    onCancel={() => setEditingItem(null)}
-                  />
-                ) : (
-                  <div>
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                        <h3 className="font-semibold text-lg">{item.name}</h3>
-                        <p className="text-green-600 font-bold text-xl">₿{item.price}</p>
-                        <p className="text-sm text-gray-500 bg-gray-100 px-2 py-1 rounded-full inline-block mt-1">
-                          {item.category}
-                        </p>
-                      </div>
+    const DashboardPage = () => (
+        <div className="p-6">
+            <h2 className="text-2xl font-bold mb-6">หน้าหลัก</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-white p-6 rounded-lg shadow-md flex items-center">
+                    <div className="bg-blue-100 text-blue-600 p-3 rounded-full mr-4"><TrendingUp size={24} /></div>
+                    <div>
+                        <p className="text-sm text-gray-500">รายได้วันนี้</p>
+                        <p className="text-2xl font-semibold">₿{todayRevenue.toFixed(2)}</p>
                     </div>
-                    <div className="flex justify-end space-x-2">
-                      <button
-                        onClick={() => setEditingItem(item.id)}
-                        className="bg-blue-100 text-blue-600 p-2 rounded-lg hover:bg-blue-200 transition-colors"
-                      >
-                        <Edit size={16} />
-                      </button>
-                      <button
-                        onClick={() => deleteMenuItem(item.id)}
-                        className="bg-red-100 text-red-600 p-2 rounded-lg hover:bg-red-200 transition-colors"
-                      >
-                        <Trash2 size={16} />
-                      </button>
+                </div>
+                <div className="bg-white p-6 rounded-lg shadow-md flex items-center">
+                    <div className="bg-green-100 text-green-600 p-3 rounded-full mr-4"><DollarSign size={24} /></div>
+                    <div>
+                        <p className="text-sm text-gray-500">รายได้ทั้งหมด</p>
+                        <p className="text-2xl font-semibold">₿{totalRevenue.toFixed(2)}</p>
                     </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+                </div>
+                <div className="bg-white p-6 rounded-lg shadow-md flex items-center">
+                    <div className="bg-yellow-100 text-yellow-600 p-3 rounded-full mr-4"><Package size={24} /></div>
+                    <div>
+                        <p className="text-sm text-gray-500">จำนวนเมนู</p>
+                        <p className="text-2xl font-semibold">{menuItems.length}</p>
+                    </div>
+                </div>
+            </div>
+            <div className="mt-8 bg-white p-6 rounded-lg shadow-md">
+                <h3 className="text-xl font-bold mb-4">5 เมนูขายดีที่สุด</h3>
+                <ul>
+                    {topSellingItems.map(([name, quantity], index) => (
+                        <li key={index} className="flex justify-between items-center py-2 border-b last:border-b-0">
+                            <p className="font-medium">{index + 1}. {name}</p>
+                            <span className="text-gray-600">{quantity} จาน</span>
+                        </li>
+                    ))}
+                </ul>
+            </div>
         </div>
-      </div>
-    </div>
-  );
-
-  // คอมโพเนนต์ฟอร์มแก้ไขเมนู
-  const MenuItemEditForm = ({ item, onSave, onCancel }) => {
-    const [editData, setEditData] = useState({
-      name: item.name,
-      price: item.price,
-      category: item.category
-    });
-
-    const handleSave = () => {
-      if (!editData.name || !editData.price || !editData.category) return;
-      onSave({
-        name: editData.name,
-        price: parseInt(editData.price),
-        category: editData.category
-      });
-    };
-
-    return (
-      <div className="space-y-3">
-        <input
-          type="text"
-          value={editData.name}
-          onChange={(e) => setEditData({ ...editData, name: e.target.value })}
-          className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          placeholder="ชื่อเมนู"
-        />
-        <input
-          type="number"
-          value={editData.price}
-          onChange={(e) => setEditData({ ...editData, price: e.target.value })}
-          className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-          placeholder="ราคา"
-        />
-        <select
-          value={editData.category}
-          onChange={(e) => setEditData({ ...editData, category: e.target.value })}
-          className="w-full p-2 border border-gray-300 rounded focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-        >
-          <option value="ข้าว">ข้าว</option>
-          <option value="เส้น">เส้น</option>
-          <option value="แกง">แกง</option>
-          <option value="เครื่องดื่ม">เครื่องดื่ม</option>
-          <option value="ของหวาน">ของหวาน</option>
-          <option value="อื่นๆ">อื่นๆ</option>
-        </select>
-        <div className="flex justify-end space-x-2">
-          <button
-            onClick={onCancel}
-            className="bg-gray-100 text-gray-600 p-2 rounded-lg hover:bg-gray-200 transition-colors"
-          >
-            <X size={16} />
-          </button>
-          <button
-            onClick={handleSave}
-            className="bg-green-100 text-green-600 p-2 rounded-lg hover:bg-green-200 transition-colors"
-          >
-            <Save size={16} />
-          </button>
-        </div>
-      </div>
     );
-  };
-  const DashboardPage = () => (
-    <div className="p-6 space-y-6">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6">แดชบอร์ดร้านอาหาร</h1>
-      
-      {/* สถิติหลัก */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-blue-600 text-sm">ยอดขายวันนี้</p>
-              <p className="text-2xl font-bold text-blue-800">₿{stats.todayRevenue}</p>
-            </div>
-            <DollarSign className="text-blue-500" size={24} />
-          </div>
-        </div>
-        
-        <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-green-600 text-sm">ยอดขายทั้งหมด</p>
-              <p className="text-2xl font-bold text-green-800">₿{stats.totalRevenue}</p>
-            </div>
-            <TrendingUp className="text-green-500" size={24} />
-          </div>
-        </div>
-        
-        <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-purple-600 text-sm">ออเดอร์วันนี้</p>
-              <p className="text-2xl font-bold text-purple-800">{stats.todayOrders}</p>
-            </div>
-            <Package className="text-purple-500" size={24} />
-          </div>
-        </div>
-        
-        <div className="bg-orange-50 p-4 rounded-lg border border-orange-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-orange-600 text-sm">ออเดอร์ทั้งหมด</p>
-              <p className="text-2xl font-bold text-orange-800">{stats.totalOrders}</p>
-            </div>
-            <Users className="text-orange-500" size={24} />
-          </div>
-        </div>
-      </div>
 
-      {/* เมนูขายดี */}
-      <div className="bg-white p-6 rounded-lg shadow-sm border">
-        <h2 className="text-lg font-semibold mb-4">เมนูขายดี TOP 5</h2>
-        <div className="space-y-3">
-          {stats.topItems.map(([itemName, quantity], index) => (
-            <div key={itemName} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-              <div className="flex items-center space-x-3">
-                <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-sm font-medium">
-                  #{index + 1}
-                </span>
-                <span className="font-medium">{itemName}</span>
-              </div>
-              <span className="text-gray-600">{quantity} จาน</span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* รายการออเดอร์ล่าสุด */}
-      <div className="bg-white p-6 rounded-lg shadow-sm border">
-        <h2 className="text-lg font-semibold mb-4">ออเดอร์ล่าสุด</h2>
-        {bills.slice(-5).reverse().map(bill => (
-          <div key={bill.id} className="flex justify-between items-center p-3 border-b last:border-b-0">
-            <div>
-              <p className="font-medium">บิลที่ #{bill.id}</p>
-              <p className="text-sm text-gray-500">{new Date(bill.date).toLocaleString('th-TH')}</p>
-            </div>
-            <div className="text-right">
-              <p className="font-semibold text-green-600">₿{bill.total}</p>
-              <p className="text-sm text-gray-500">{bill.status}</p>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-
-  // หน้าเพิ่มออเดอร์
-  const OrderPage = () => (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6">รับออเดอร์</h1>
-      
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* เมนูอาหาร */}
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold">เมนูอาหาร</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {menuItems.map(item => (
-              <div key={item.id} className="bg-white p-4 rounded-lg shadow-sm border hover:shadow-md transition-shadow">
-                <div className="flex justify-between items-start mb-2">
-                  <h3 className="font-medium">{item.name}</h3>
-                  <span className="text-blue-600 font-semibold">₿{item.price}</span>
+    const OrderPage = () => {
+        const orderTotal = calculateTotal(currentOrder);
+        return (
+            <div className="p-6 grid grid-cols-1 md:grid-cols-3 gap-6 h-full">
+                <div className="md:col-span-2 bg-white p-6 rounded-lg shadow-md overflow-y-auto">
+                    <h2 className="text-2xl font-bold mb-4">เลือกเมนู</h2>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                        {menuItems.map(item => (
+                            <div key={item.id} className="p-4 border rounded-lg cursor-pointer hover:bg-gray-50" onClick={() => addToOrder(item)}>
+                                <h3 className="font-semibold">{item.name}</h3>
+                                <p className="text-gray-600">₿{item.price}</p>
+                            </div>
+                        ))}
+                    </div>
                 </div>
-                <p className="text-sm text-gray-500 mb-3">{item.category}</p>
-                <button
-                  onClick={() => addToOrder(item)}
-                  className="w-full bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors"
-                >
-                  เพิ่มลงออเดอร์
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* ออเดอร์ปัจจุบัน */}
-        <div className="bg-white p-6 rounded-lg shadow-sm border">
-          <h2 className="text-lg font-semibold mb-4">ออเดอร์ปัจจุบัน</h2>
-          
-          {currentOrder.length === 0 ? (
-            <p className="text-gray-500 text-center py-8">ยังไม่มีรายการในออเดอร์</p>
-          ) : (
-            <div className="space-y-3">
-              {currentOrder.map(item => (
-                <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                  <div>
-                    <h4 className="font-medium">{item.name}</h4>
-                    <p className="text-sm text-gray-500">₿{item.price} x {item.quantity}</p>
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => updateQuantity(item.id, item.quantity - 1)}
-                      className="bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
-                    >
-                      <Minus size={16} />
-                    </button>
-                    <span className="mx-2 font-medium">{item.quantity}</span>
-                    <button
-                      onClick={() => updateQuantity(item.id, item.quantity + 1)}
-                      className="bg-green-100 text-green-600 p-1 rounded hover:bg-green-200"
-                    >
-                      <Plus size={16} />
-                    </button>
-                    <button
-                      onClick={() => removeFromOrder(item.id)}
-                      className="bg-gray-100 text-red-600 p-1 rounded hover:bg-gray-200 ml-2"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
+                <div className="md:col-span-1 bg-white p-6 rounded-lg shadow-md flex flex-col h-full">
+                    <h2 className="text-2xl font-bold mb-4">รายการสั่งซื้อ</h2>
+                    <div className="flex-grow overflow-y-auto">
+                        {currentOrder.length === 0 ? (
+                            <p className="text-gray-500 text-center mt-8">ยังไม่มีรายการ</p>
+                        ) : (
+                            currentOrder.map(item => (
+                                <div key={item.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg mb-2">
+                                    <div>
+                                        <h4 className="font-medium">{item.name}</h4>
+                                        <p className="text-sm text-gray-500">₿{item.price} x {item.quantity}</p>
+                                    </div>
+                                    <div className="flex items-center">
+                                        <button onClick={() => updateQuantity(item.id, item.quantity - 1)} className="text-red-500 p-1"><Minus size={16} /></button>
+                                        <span className="mx-2 font-medium">{item.quantity}</span>
+                                        <button onClick={() => updateQuantity(item.id, item.quantity + 1)} className="text-green-500 p-1"><Plus size={16} /></button>
+                                        <button onClick={() => removeFromOrder(item.id)} className="text-red-500 p-1 ml-2"><Trash2 size={16} /></button>
+                                    </div>
+                                </div>
+                            ))
+                        )}
+                    </div>
+                    <div className="mt-4 border-t pt-4">
+                        <div className="flex justify-between items-center text-xl font-bold mb-4">
+                            <span>รวมทั้งหมด:</span>
+                            <span>₿{orderTotal.toFixed(2)}</span>
+                        </div>
+                        <button
+                            onClick={generateBill}
+                            className="w-full bg-blue-500 text-white p-3 rounded-lg font-bold"
+                            disabled={currentOrder.length === 0}
+                        >
+                            <Receipt size={20} className="inline-block mr-2" />
+                            สร้างบิล
+                        </button>
+                    </div>
                 </div>
-              ))}
-              
-              <div className="border-t pt-4 mt-4">
-                <div className="flex justify-between text-lg font-semibold">
-                  <span>ยอดรวม:</span>
-                  <span className="text-green-600">₿{calculateTotal(currentOrder)}</span>
-                </div>
-                <button
-                  onClick={generateBill}
-                  className="w-full bg-green-500 text-white py-3 px-4 rounded-lg hover:bg-green-600 transition-colors mt-4"
-                >
-                  ออกบิล
-                </button>
-              </div>
             </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
+        );
+    };
 
-  // หน้าบิล
-  const BillPage = () => {
-    const latestBill = bills[bills.length - 1];
+    const BillPage = () => {
+        const latestBill = bills[bills.length - 1];
+        if (!latestBill) {
+            return (
+                <div className="p-6 text-center text-gray-500">
+                    <h2 className="text-2xl font-bold mb-4">ยังไม่มีบิลล่าสุด</h2>
+                    <p>กรุณาทำการสั่งซื้อเพื่อสร้างบิล</p>
+                </div>
+            );
+        }
+
+        const qrCodeUrl = generatePromptPayQR(latestBill.total);
+
+        return (
+            <div className="p-6 flex flex-col items-center">
+                <div className="bg-white p-8 rounded-lg shadow-md w-full max-w-xl">
+                    <div className="text-center mb-6">
+                        <h2 className="text-3xl font-bold text-blue-600">{shopSettings.shopName}</h2>
+                        <p className="text-sm text-gray-500">บิลเลขที่ #{latestBill.id}</p>
+                        <p className="text-sm text-gray-500">{new Date(latestBill.date).toLocaleString('th-TH')}</p>
+                    </div>
+                    <div className="border-t border-b py-4 mb-4">
+                        <h3 className="font-semibold text-lg mb-2">รายการ</h3>
+                        <ul>
+                            {latestBill.items.map((item, index) => (
+                                <li key={index} className="flex justify-between py-1">
+                                    <span>{item.name} x {item.quantity}</span>
+                                    <span>₿{(item.price * item.quantity).toFixed(2)}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                    <div className="flex justify-between text-2xl font-bold mb-6">
+                        <span>รวมทั้งหมด</span>
+                        <span className="text-green-600">₿{latestBill.total.toFixed(2)}</span>
+                    </div>
+                    <div className="text-center">
+                        <p className="text-gray-600 mb-2">ชำระเงินผ่าน PromptPay</p>
+                        {qrCodeUrl && (
+                            <img src={qrCodeUrl} alt="PromptPay QR Code" className="w-48 h-48 mx-auto" />
+                        )}
+                        <p className="font-medium mt-2">{shopSettings.promptPayNumber}</p>
+                    </div>
+                </div>
+                <div className="mt-6 flex space-x-4">
+                    {latestBill.status === 'Unpaid' && (
+                        <button onClick={() => payBill(latestBill.id)} className="bg-green-500 text-white p-3 rounded-lg font-bold">
+                            <DollarSign size={20} className="inline-block mr-2" />
+                            ชำระแล้ว
+                        </button>
+                    )}
+                    <button onClick={() => window.print()} className="bg-gray-500 text-white p-3 rounded-lg font-bold">
+                        <Receipt size={20} className="inline-block mr-2" />
+                        พิมพ์บิล
+                    </button>
+                    <button onClick={() => setCurrentPage('order')} className="bg-blue-500 text-white p-3 rounded-lg font-bold">
+                        <Plus size={20} className="inline-block mr-2" />
+                        ทำรายการใหม่
+                    </button>
+                </div>
+            </div>
+        );
+    };
+
+    const MenuPage = () => {
+        const [newItem, setNewItem] = useState<Omit<MenuItem, 'id'>>({ name: '', price: 0, category: 'Food' });
+        const [settingsForm, setSettingsForm] = useState(shopSettings);
+
+        const handleNewItemSubmit = (e: React.FormEvent) => {
+            e.preventDefault();
+            if (newItem.name && newItem.price > 0) {
+                addMenuItem(newItem);
+                setNewItem({ name: '', price: 0, category: 'Food' });
+            }
+        };
+
+        const handleSettingsSubmit = (e: React.FormEvent) => {
+            e.preventDefault();
+            setShopSettings(settingsForm);
+        };
+
+        const MenuItemEditForm = ({ item, onSave, onCancel }: { item: MenuItem; onSave: (updatedItem: MenuItem) => void; onCancel: () => void }) => {
+            const [editItem, setEditItem] = useState(item);
+            return (
+                <div className="p-3 bg-gray-100 rounded-lg flex flex-col space-y-2">
+                    <input
+                        type="text"
+                        value={editItem.name}
+                        onChange={(e) => setEditItem({ ...editItem, name: e.target.value })}
+                        className="p-2 border rounded"
+                    />
+                    <input
+                        type="number"
+                        value={editItem.price}
+                        onChange={(e) => setEditItem({ ...editItem, price: Number(e.target.value) })}
+                        className="p-2 border rounded"
+                    />
+                    <div className="flex space-x-2">
+                        <button onClick={() => onSave(editItem)} className="p-2 bg-green-500 text-white rounded"><Save size={16} /></button>
+                        <button onClick={onCancel} className="p-2 bg-red-500 text-white rounded"><X size={16} /></button>
+                    </div>
+                </div>
+            );
+        };
+
+        return (
+            <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="bg-white p-6 rounded-lg shadow-md">
+                    <h2 className="text-2xl font-bold mb-4">จัดการเมนู</h2>
+                    <form onSubmit={handleNewItemSubmit} className="mb-4 flex flex-col space-y-2">
+                        <input
+                            type="text"
+                            value={newItem.name}
+                            onChange={(e) => setNewItem({ ...newItem, name: e.target.value })}
+                            placeholder="ชื่อเมนู"
+                            className="p-2 border rounded"
+                        />
+                        <input
+                            type="number"
+                            value={newItem.price}
+                            onChange={(e) => setNewItem({ ...newItem, price: Number(e.target.value) })}
+                            placeholder="ราคา"
+                            className="p-2 border rounded"
+                        />
+                        <select
+                            value={newItem.category}
+                            onChange={(e) => setNewItem({ ...newItem, category: e.target.value as 'Food' | 'Drink' | 'Dessert' })}
+                            className="p-2 border rounded"
+                        >
+                            <option value="Food">อาหาร</option>
+                            <option value="Drink">เครื่องดื่ม</option>
+                            <option value="Dessert">ของหวาน</option>
+                        </select>
+                        <button type="submit" className="bg-blue-500 text-white p-2 rounded font-bold">เพิ่มเมนู</button>
+                    </form>
+                    <div className="mt-6 space-y-2">
+                        {menuItems.map(item => (
+                            <div key={item.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                                {editingItem === item.id ? (
+                                    <MenuItemEditForm
+                                        item={item}
+                                        onSave={(updatedItem) => {
+                                            updateMenuItem(item.id, updatedItem);
+                                            setEditingItem(null);
+                                        }}
+                                        onCancel={() => setEditingItem(null)}
+                                    />
+                                ) : (
+                                    <>
+                                        <div className="flex-grow">
+                                            <p className="font-medium">{item.name} - {item.price}₿</p>
+                                            <p className="text-sm text-gray-500">หมวดหมู่: {item.category}</p>
+                                        </div>
+                                        <div className="flex space-x-2">
+                                            <button onClick={() => setEditingItem(item.id)} className="p-1 text-blue-500"><Edit size={20} /></button>
+                                            <button onClick={() => deleteMenuItem(item.id)} className="p-1 text-red-500"><Trash2 size={20} /></button>
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                <div className="bg-white p-6 rounded-lg shadow-md">
+                    <h2 className="text-2xl font-bold mb-4">ตั้งค่าร้านค้า</h2>
+                    <form onSubmit={handleSettingsSubmit} className="flex flex-col space-y-4">
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">ชื่อร้าน</label>
+                            <input
+                                type="text"
+                                value={settingsForm.shopName}
+                                onChange={(e) => setSettingsForm({ ...settingsForm, shopName: e.target.value })}
+                                className="mt-1 block w-full p-2 border rounded-md"
+                            />
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700">เบอร์ PromptPay</label>
+                            <input
+                                type="text"
+                                value={settingsForm.promptPayNumber}
+                                onChange={(e) => setSettingsForm({ ...settingsForm, promptPayNumber: e.target.value })}
+                                className="mt-1 block w-full p-2 border rounded-md"
+                            />
+                        </div>
+                        <button type="submit" className="bg-green-500 text-white p-2 rounded font-bold">บันทึกการตั้งค่า</button>
+                    </form>
+                </div>
+            </div>
+        );
+    };
+
+    const ReportPage = () => (
+        <div className="p-6">
+            <h2 className="text-2xl font-bold mb-6">รายงาน</h2>
+            <div className="bg-white p-6 rounded-lg shadow-md">
+                <h3 className="text-xl font-bold mb-4">ยอดขายทั้งหมด</h3>
+                <p className="text-4xl font-extrabold text-green-600 mb-6">₿{totalRevenue.toFixed(2)}</p>
+                <h3 className="text-xl font-bold mb-4">ประวัติบิล</h3>
+                <div className="space-y-2">
+                    {bills.slice().reverse().map(bill => (
+                        <div key={bill.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
+                            <div>
+                                <p className="font-medium">บิล #{bill.id}</p>
+                                <p className="text-xs text-gray-500">{new Date(bill.date).toLocaleString('th-TH')}</p>
+                                <p className="text-xs text-gray-500">{bill.items.length} รายการ</p>
+                            </div>
+                            <p className="font-semibold text-green-600">₿{bill.total.toFixed(2)}</p>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        </div>
+    );
+    
+    const renderPage = () => {
+        switch (currentPage) {
+            case 'dashboard':
+                return <DashboardPage />;
+            case 'order':
+                return <OrderPage />;
+            case 'bill':
+                return <BillPage />;
+            case 'menu':
+                return <MenuPage />;
+            case 'report':
+                return <ReportPage />;
+            default:
+                return <DashboardPage />;
+        }
+    };
     
     return (
-      <div className="p-6">
-        <h1 className="text-2xl font-bold text-gray-800 mb-6">ออกบิล</h1>
-        
-        {latestBill ? (
-          <div className="max-w-md mx-auto bg-white p-6 rounded-lg shadow-lg border">
-            <div className="text-center mb-6">
-              <h2 className="text-xl font-bold">{shopSettings.shopName}</h2>
-              <p className="text-gray-500">บิลเลขที่ #{latestBill.id}</p>
-              <p className="text-sm text-gray-500">{new Date(latestBill.date).toLocaleString('th-TH')}</p>
-            </div>
-            
-            <div className="space-y-2 mb-6">
-              {latestBill.items.map((item, index) => (
-                <div key={index} className="flex justify-between">
-                  <span>{item.name} x{item.quantity}</span>
-                  <span>₿{item.price * item.quantity}</span>
+        <div className="bg-gray-100 min-h-screen font-sans flex flex-col">
+            <header className="bg-blue-600 text-white p-4 shadow-md flex items-center justify-between">
+                <div className="flex items-center">
+                    <h1 className="text-2xl font-bold">{shopSettings.shopName}</h1>
                 </div>
-              ))}
-            </div>
-            
-            <div className="border-t pt-4 mb-6">
-              <div className="flex justify-between text-lg font-bold">
-                <span>ยอดรวม:</span>
-                <span className="text-green-600">₿{latestBill.total}</span>
-              </div>
-            </div>
-
-            {/* QR Code PromptPay */}
-            <div className="bg-blue-50 p-4 rounded-lg mb-6">
-              <h3 className="text-center font-semibold text-blue-800 mb-3">
-                💳 ชำระเงินผ่าน PromptPay
-              </h3>
-              <div className="flex justify-center mb-3">
-                <img
-                  src={generatePromptPayQR(latestBill.total)}
-                  alt="PromptPay QR Code"
-                  className="w-48 h-48 border-2 border-blue-200 rounded-lg"
-                />
-              </div>
-              <div className="text-center text-sm text-blue-700">
-                <p className="font-medium">{shopSettings.promptPayName}</p>
-                <p>{shopSettings.promptPayId}</p>
-                <p className="text-xs text-blue-600 mt-1">สแกน QR Code เพื่อชำระเงิน</p>
-              </div>
-            </div>
-
-            <div className="text-center mb-4 text-sm text-gray-500">
-              ขอบคุณที่ใช้บริการ
-            </div>
-            
-            <div className="space-y-2">
-              <button
-                onClick={() => window.print()}
-                className="w-full bg-green-500 text-white py-2 px-4 rounded-lg hover:bg-green-600 transition-colors"
-              >
-                พิมพ์บิล
-              </button>
-              <button
-                onClick={() => setCurrentPage('order')}
-                className="w-full bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors"
-              >
-                รับออเดอร์ใหม่
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="text-center py-8">
-            <p className="text-gray-500">ไม่มีบิลที่จะแสดง</p>
-            <button
-              onClick={() => setCurrentPage('order')}
-              className="mt-4 bg-blue-500 text-white py-2 px-4 rounded-lg hover:bg-blue-600 transition-colors"
-            >
-              รับออเดอร์
-            </button>
-          </div>
-        )}
-      </div>
+                <nav>
+                    <ul className="flex space-x-2">
+                        <li>
+                            <button onClick={() => setCurrentPage('dashboard')} className={`p-2 rounded-lg ${currentPage === 'dashboard' ? 'bg-blue-700' : 'hover:bg-blue-500'}`}>
+                                <Home size={24} />
+                            </button>
+                        </li>
+                        <li>
+                            <button onClick={() => setCurrentPage('order')} className={`p-2 rounded-lg ${currentPage === 'order' ? 'bg-blue-700' : 'hover:bg-blue-500'}`}>
+                                <ShoppingCart size={24} />
+                            </button>
+                        </li>
+                        <li>
+                            <button onClick={() => setCurrentPage('bill')} className={`p-2 rounded-lg ${currentPage === 'bill' ? 'bg-blue-700' : 'hover:bg-blue-500'}`}>
+                                <Receipt size={24} />
+                            </button>
+                        </li>
+                        <li>
+                            <button onClick={() => setCurrentPage('menu')} className={`p-2 rounded-lg ${currentPage === 'menu' ? 'bg-blue-700' : 'hover:bg-blue-500'}`}>
+                                <Package size={24} />
+                            </button>
+                        </li>
+                        <li>
+                            <button onClick={() => setCurrentPage('report')} className={`p-2 rounded-lg ${currentPage === 'report' ? 'bg-blue-700' : 'hover:bg-blue-500'}`}>
+                                <BarChart3 size={24} />
+                            </button>
+                        </li>
+                    </ul>
+                </nav>
+            </header>
+            <main className="flex-grow">
+                {renderPage()}
+            </main>
+        </div>
     );
-  };
-
-  // หน้ารายงาน
-  const ReportPage = () => (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold text-gray-800 mb-6">รายงานยอดขาย</h1>
-      
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* สรุปยอดขาย */}
-        <div className="bg-white p-6 rounded-lg shadow-sm border">
-          <h2 className="text-lg font-semibold mb-4">สรุปยอดขาย</h2>
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <span>ยอดขายวันนี้:</span>
-              <span className="font-semibold text-green-600">₿{stats.todayRevenue}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>ออเดอร์วันนี้:</span>
-              <span className="font-semibold">{stats.todayOrders} ออเดอร์</span>
-            </div>
-            <div className="flex justify-between">
-              <span>ยอดขายรวม:</span>
-              <span className="font-semibold text-blue-600">₿{stats.totalRevenue}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>ออเดอร์รวม:</span>
-              <span className="font-semibold">{stats.totalOrders} ออเดอร์</span>
-            </div>
-          </div>
-        </div>
-
-        {/* รายการบิลทั้งหมด */}
-        <div className="bg-white p-6 rounded-lg shadow-sm border">
-          <h2 className="text-lg font-semibold mb-4">รายการบิลทั้งหมด</h2>
-          <div className="max-h-64 overflow-y-auto space-y-2">
-            {bills.length === 0 ? (
-              <p className="text-gray-500 text-center">ยังไม่มีบิล</p>
-            ) : (
-              bills.slice().reverse().map(bill => (
-                <div key={bill.id} className="flex justify-between items-center p-3 bg-gray-50 rounded-lg">
-                  <div>
-                    <p className="font-medium">บิล #{bill.id}</p>
-                    <p className="text-xs text-gray-500">{new Date(bill.date).toLocaleString('th-TH')}</p>
-                  </div>
-                  <div className="text-right">
-                    <p className="font-semibold text-green-600">₿{bill.total}</p>
-                    <p className="text-xs text-gray-500">{bill.items.length} รายการ</p>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  return (
-    <div className="min-h-screen bg-gray-100">
-      {/* Navigation */}
-      <nav className="bg-white shadow-sm border-b">
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex justify-between items-center py-4">
-            <h1 className="text-xl font-bold text-gray-800">ระบบจัดการร้านอาหาร</h1>
-            <div className="flex space-x-4">
-              <button
-                onClick={() => setCurrentPage('dashboard')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
-                  currentPage === 'dashboard'
-                    ? 'bg-blue-500 text-white'
-                    : 'text-gray-600 hover:bg-gray-100'
-                }`}
-              >
-                <Home size={20} />
-                <span>แดชบอร์ด</span>
-              </button>
-              <button
-                onClick={() => setCurrentPage('order')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
-                  currentPage === 'order'
-                    ? 'bg-blue-500 text-white'
-                    : 'text-gray-600 hover:bg-gray-100'
-                }`}
-              >
-                <ShoppingCart size={20} />
-                <span>รับออเดอร์</span>
-              </button>
-              <button
-                onClick={() => setCurrentPage('bill')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
-                  currentPage === 'bill'
-                    ? 'bg-blue-500 text-white'
-                    : 'text-gray-600 hover:bg-gray-100'
-                }`}
-              >
-                <Receipt size={20} />
-                <span>บิล</span>
-              </button>
-              <button
-                onClick={() => setCurrentPage('menu')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
-                  currentPage === 'menu'
-                    ? 'bg-blue-500 text-white'
-                    : 'text-gray-600 hover:bg-gray-100'
-                }`}
-              >
-                <Settings size={20} />
-                <span>จัดการเมนู</span>
-              </button>
-              <button
-                onClick={() => setCurrentPage('report')}
-                className={`flex items-center space-x-2 px-4 py-2 rounded-lg transition-colors ${
-                  currentPage === 'report'
-                    ? 'bg-blue-500 text-white'
-                    : 'text-gray-600 hover:bg-gray-100'
-                }`}
-              >
-                <BarChart3 size={20} />
-                <span>รายงาน</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </nav>
-
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto">
-        {currentPage === 'dashboard' && <DashboardPage />}
-        {currentPage === 'order' && <OrderPage />}
-        {currentPage === 'bill' && <BillPage />}
-        {currentPage === 'menu' && <MenuManagePage />}
-        {currentPage === 'report' && <ReportPage />}
-      </main>
-    </div>
-  );
-};
-
-export default RestaurantApp;
+}
