@@ -2,6 +2,8 @@
   "name": "my-restaurant-app",
   "private": true,
   "version": "0.0.0",
+  "homepage": "https://<Darkwing-eiei
+  >.github.io/<ShopEZ>/",
   "type": "module",
   "scripts": {
     "dev": "vite",
